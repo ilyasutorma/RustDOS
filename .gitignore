@@ -1,0 +1,10 @@
+/target
+/build
+*.img
+*.bin
+*.COM
+*.o
+*.elf
+.DS_Store
+.vscode/
+.idea/

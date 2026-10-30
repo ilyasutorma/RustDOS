@@ -1,0 +1,11 @@
+[package]
+name = "rustdos-kernel"
+version = "0.0.1"
+edition = "2021"
+description = "RustDOS: DOS-compatible 16-bit real-mode kernel in Rust"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
