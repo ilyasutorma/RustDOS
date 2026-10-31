@@ -15,11 +15,15 @@ mod shell;
 pub extern "C" fn kernel_main() -> ! {
     bios::tty::print("RustDOS 0.0.1\r\n");
 
-    unsafe { arch::ivt::init() };
+    unsafe {
+        arch::ivt::init();
+        mem::mcb::init(0x3000, 0xA000);
+    }
 
-    bios::tty::print("INT 21h test:\r\n");
+    bios::tty::print("MCB ready\r\n");
 
     let msg = b"Hello from DOS!$";
+
     unsafe {
         core::arch::asm!(
             "int 0x21",
@@ -30,5 +34,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     bios::tty::print("\r\nDone.\r\n");
 
-    loop { unsafe { core::arch::asm!("hlt") } }
+    loop {
+        unsafe { core::arch::asm!("hlt") }
+    }
 }

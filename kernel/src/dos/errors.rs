@@ -1,5 +1,3 @@
-//! DOS extended error codes returned in AX with CF set.
-
 #[repr(u16)]
 #[derive(Clone, Copy)]
 pub enum DosError {
@@ -9,5 +7,7 @@ pub enum DosError {
     TooManyOpenFiles = 0x04,
     AccessDenied = 0x05,
     InvalidHandle = 0x06,
+    MemoryArenaTrashed = 0x07,
     InsufficientMemory = 0x08,
+    InvalidMemoryBlock = 0x09,
 }
