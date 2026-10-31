@@ -11,14 +11,24 @@ mod mem;
 mod panic;
 mod shell;
 
-/// Rust entry point, reached from `arch::entry::_start`.
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
     bios::tty::print("RustDOS 0.0.1\r\n");
 
-    // TODO: install IVT vectors, init MCB chain, mount FAT, start shell.
+    unsafe { arch::ivt::init() };
 
-    loop {
-        unsafe { core::arch::asm!("hlt") };
+    bios::tty::print("INT 21h test:\r\n");
+
+    let msg = b"Hello from DOS!$";
+    unsafe {
+        core::arch::asm!(
+            "int 0x21",
+            in("ax") 0x0900u16,
+                         in("dx") msg.as_ptr() as u16
+        );
     }
+
+    bios::tty::print("\r\nDone.\r\n");
+
+    loop { unsafe { core::arch::asm!("hlt") } }
 }
