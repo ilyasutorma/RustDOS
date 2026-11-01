@@ -13,7 +13,7 @@ static mut FIRST: u16 = 0;
 
 #[inline]
 unsafe fn ptr(seg: u16) -> *mut Mcb {
-    (((seg as u32) << 4) as *mut Mcb)
+    ((seg as u32) << 4) as *mut Mcb
 }
 
 unsafe fn clear_name(p: *mut Mcb) {
