@@ -1,4 +1,5 @@
 #![allow(static_mut_refs)]
+
 use crate::bios::tty;
 use crate::mem::mcb;
 
@@ -133,13 +134,9 @@ fn cls() {
 }
 
 fn dir() {
-    tty::print("\r\n Volume in drive C has no label\r\n");
-    tty::print(" Directory of C:\\\r\n");
-    tty::print("\r\n");
-    tty::print("COMMAND  COM    12,345  01-01-90\r\n");
-    tty::print("AUTOEXEC BAT     1,234  01-01-90\r\n");
-    tty::print("CONFIG   SYS     2,345  01-01-90\r\n");
-    tty::print("        3 file(s)\r\n");
+    unsafe {
+        crate::fs::fat::list_root();
+    }
 }
 
 fn r#type(name: &[u8]) {
@@ -148,14 +145,8 @@ fn r#type(name: &[u8]) {
         return;
     }
 
-    if eq(name, b"HELP.TXT") {
-        tty::print("\r\nThis is RustDOS.\r\n");
-        tty::print("Type HELP for commands.\r\n");
-    } else if eq(name, b"README.TXT") {
-        tty::print("\r\nWelcome to RustDOS!\r\n");
-        tty::print("A DOS-compatible kernel written in Rust.\r\n");
-    } else {
-        tty::print("File not found\r\n");
+    unsafe {
+        crate::fs::fat::type_file(name);
     }
 }
 

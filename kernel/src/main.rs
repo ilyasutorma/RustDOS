@@ -18,23 +18,8 @@ pub extern "C" fn kernel_main() -> ! {
     unsafe {
         arch::ivt::init();
         mem::mcb::init(0x3000, 0xA000);
+        fs::fat::init(0x00);
     }
 
-    bios::tty::print("MCB ready\r\n");
-
-    let msg = b"Hello from DOS!$";
-
-    unsafe {
-        core::arch::asm!(
-            "int 0x21",
-            in("ax") 0x0900u16,
-                         in("dx") msg.as_ptr() as u16
-        );
-    }
-
-    bios::tty::print("\r\nDone.\r\n");
-
-    loop {
-        unsafe { core::arch::asm!("hlt") }
-    }
+    shell::commands::run();
 }
