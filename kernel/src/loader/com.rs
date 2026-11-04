@@ -1,3 +1,4 @@
+use crate::arch::farmem::{copy_to, fill, wr16, wr8};
 use crate::mem::mcb;
 
 static mut CURRENT: u16 = 0;
@@ -28,22 +29,15 @@ pub unsafe fn run_com(bytes: &[u8]) {
 
     CURRENT = seg;
 
-    let base = ((seg as u32) << 4) as *mut u8;
+    // Program segment: zero 64 KB, build the PSP header, copy the image to :0100.
+    fill(seg, 0, 0, 0x8000);
+    fill(seg, 0x8000, 0, 0x8000);
 
-    core::ptr::write_bytes(base, 0, 0x10000);
+    wr8(seg, 0, 0xCD);
+    wr8(seg, 1, 0x20);
+    wr16(seg, 2, seg + 0x1000);
 
-    base.write(0xCD);
-    base.add(1).write(0x20);
-
-    let top = seg + 0x1000;
-    base.add(2).write(top as u8);
-    base.add(3).write((top >> 8) as u8);
-
-    core::ptr::copy_nonoverlapping(
-        bytes.as_ptr(),
-                                   base.add(0x100),
-                                   bytes.len(),
-    );
+    copy_to(seg, 0x100, bytes.as_ptr(), bytes.len() as u16);
 
     exec(seg);
 }

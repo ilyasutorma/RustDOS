@@ -17,8 +17,11 @@ pub extern "C" fn kernel_main() -> ! {
 
     unsafe {
         arch::ivt::init();
+        bios::tty::print("[ivt ok]\r\n");
         mem::mcb::init(0x3000, 0xA000);
-        fs::fat::init(0x00);
+        bios::tty::print("[mcb ok]\r\n");
+        let fat = fs::fat::init(0x00);
+        bios::tty::print(if fat { "[fat ok]\r\n" } else { "[fat FAIL]\r\n" });
     }
 
     shell::commands::run();

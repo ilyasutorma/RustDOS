@@ -6,3 +6,4 @@ pub mod regs;
 pub mod ivt;
 pub mod trampolines;
 pub mod a20;
+pub mod farmem;

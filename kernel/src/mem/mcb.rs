@@ -1,117 +1,110 @@
-#[repr(C, packed)]
-pub struct Mcb {
-    pub kind: u8,
-    pub owner: u16,
-    pub size: u16,
-    pub reserved: [u8; 3],
-    pub name: [u8; 8],
-}
+//! Memory Control Blocks. Every function works on MCB *segments* and reaches
+//! the header through `arch::farmem` (Rust pointers are DS-relative and cannot
+//! address conventional memory above the kernel segment).
 
-const _: () = assert!(core::mem::size_of::<Mcb>() == 16);
+use crate::arch::farmem::{fill, rd16, rd8, wr16, wr8};
+
+// Header layout (16 bytes): kind u8, owner u16, size u16, reserved [u8;3], name [u8;8]
+const OFF_KIND: u16 = 0;
+const OFF_OWNER: u16 = 1;
+const OFF_SIZE: u16 = 3;
+const OFF_RESERVED: u16 = 5;
+const OFF_NAME: u16 = 8;
 
 static mut FIRST: u16 = 0;
 
-#[inline]
-unsafe fn ptr(seg: u16) -> *mut Mcb {
-    ((seg as u32) << 4) as *mut Mcb
+unsafe fn kind(s: u16) -> u8 { rd8(s, OFF_KIND) }
+unsafe fn owner(s: u16) -> u16 { rd16(s, OFF_OWNER) }
+unsafe fn size(s: u16) -> u16 { rd16(s, OFF_SIZE) }
+unsafe fn set_kind(s: u16, v: u8) { wr8(s, OFF_KIND, v) }
+unsafe fn set_owner(s: u16, v: u16) { wr16(s, OFF_OWNER, v) }
+unsafe fn set_size(s: u16, v: u16) { wr16(s, OFF_SIZE, v) }
+
+unsafe fn clear_name(s: u16) {
+    fill(s, OFF_NAME, 0, 8);
 }
 
-unsafe fn clear_name(p: *mut Mcb) {
-    let d = core::ptr::addr_of_mut!((*p).name) as *mut u8;
-    core::ptr::write_bytes(d, 0, 8);
+unsafe fn set_name(s: u16, name: &[u8]) {
+    clear_name(s);
+    let n = name.len().min(8);
+    for i in 0..n {
+        wr8(s, OFF_NAME + i as u16, name[i]);
+    }
 }
 
-unsafe fn set_name(p: *mut Mcb, s: &[u8]) {
-    let d = core::ptr::addr_of_mut!((*p).name) as *mut u8;
-    let n = s.len().min(8);
-    core::ptr::write_bytes(d, 0, 8);
-    core::ptr::copy_nonoverlapping(s.as_ptr(), d, n);
+/// Write a fresh free-block header.
+unsafe fn make_free(s: u16, k: u8, sz: u16) {
+    set_kind(s, k);
+    set_owner(s, 0);
+    set_size(s, sz);
+    fill(s, OFF_RESERVED, 0, 3);
+    clear_name(s);
 }
 
-unsafe fn bad(p: *mut Mcb) -> bool {
-    let k = (*p).kind;
+unsafe fn bad(s: u16) -> bool {
+    let k = kind(s);
     k != b'M' && k != b'Z'
 }
 
 unsafe fn join(seg: u16) {
-    let mut s = seg;
+    let s = seg;
 
     loop {
-        let p = ptr(s);
-
-        if bad(p) || (*p).kind != b'M' || (*p).owner != 0 {
+        if bad(s) || kind(s) != b'M' || owner(s) != 0 {
             return;
         }
 
-        let ns = s + 1 + (*p).size;
-        let q = ptr(ns);
+        let ns = s + 1 + size(s);
 
-        if bad(q) || (*q).owner != 0 {
+        if bad(ns) || owner(ns) != 0 {
             return;
         }
 
-        let k = (*q).kind;
-        (*p).size = (*p).size + 1 + (*q).size;
-        (*p).kind = k;
+        let k = kind(ns);
+        set_size(s, size(s) + 1 + size(ns));
+        set_kind(s, k);
 
         if k == b'Z' {
             return;
         }
-
-        s = seg;
     }
 }
 
 pub unsafe fn init(first: u16, end: u16) {
     FIRST = first;
-
-    let p = ptr(first);
-    (*p).kind = b'Z';
-    (*p).owner = 0;
-    (*p).size = end - first - 1;
-    (*p).reserved = [0; 3];
-    clear_name(p);
+    make_free(first, b'Z', end - first - 1);
 }
 
-pub unsafe fn alloc(need: u16, owner: u16, name: &[u8]) -> Option<u16> {
+pub unsafe fn alloc(need: u16, owner_seg: u16, name: &[u8]) -> Option<u16> {
     let mut s = FIRST;
 
     loop {
-        let p = ptr(s);
-
-        if bad(p) {
+        if bad(s) {
             return None;
         }
 
-        let size = (*p).size;
+        let sz = size(s);
 
-        if (*p).owner == 0 && size >= need {
-            if size > need + 1 {
-                let k = (*p).kind;
-                let ns = s + 1 + need;
-                let q = ptr(ns);
+        if owner(s) == 0 && sz >= need {
+            if sz > need + 1 {
+                let k = kind(s);
+                make_free(s + 1 + need, k, sz - need - 1);
 
-                (*q).kind = k;
-                (*q).owner = 0;
-                (*q).size = size - need - 1;
-                (*q).reserved = [0; 3];
-                clear_name(q);
-
-                (*p).kind = b'M';
-                (*p).size = need;
+                set_kind(s, b'M');
+                set_size(s, need);
             }
 
-            (*p).owner = owner;
-            set_name(p, name);
+            set_owner(s, owner_seg);
+            set_name(s, name);
 
             return Some(s + 1);
         }
 
-        if (*p).kind == b'Z' {
+        if kind(s) == b'Z' {
             return None;
         }
 
-        s += 1 + size;
+        s += 1 + sz;
     }
 }
 
@@ -121,14 +114,13 @@ pub unsafe fn free(seg: u16) -> bool {
     }
 
     let s = seg - 1;
-    let p = ptr(s);
 
-    if bad(p) {
+    if bad(s) {
         return false;
     }
 
-    (*p).owner = 0;
-    clear_name(p);
+    set_owner(s, 0);
+    clear_name(s);
     collect();
 
     true
@@ -140,47 +132,38 @@ pub unsafe fn resize(seg: u16, need: u16) -> Result<u16, u16> {
     }
 
     let s = seg - 1;
-    let p = ptr(s);
 
-    if bad(p) {
+    if bad(s) {
         return Err(largest());
     }
 
-    let old = (*p).size;
+    let old = size(s);
 
     if need <= old {
         let left = old - need;
 
         if left > 1 {
-            let k = (*p).kind;
-            let ns = s + 1 + need;
-            let q = ptr(ns);
+            let k = kind(s);
+            make_free(s + 1 + need, k, left - 1);
 
-            (*q).kind = k;
-            (*q).owner = 0;
-            (*q).size = left - 1;
-            (*q).reserved = [0; 3];
-            clear_name(q);
-
-            (*p).kind = b'M';
-            (*p).size = need;
+            set_kind(s, b'M');
+            set_size(s, need);
         }
 
-        return Ok((*p).size);
+        return Ok(size(s));
     }
 
-    if (*p).kind != b'M' {
+    if kind(s) != b'M' {
         return Err(largest());
     }
 
     let ns = s + 1 + old;
-    let q = ptr(ns);
 
-    if bad(q) || (*q).owner != 0 {
+    if bad(ns) || owner(ns) != 0 {
         return Err(largest());
     }
 
-    let total = old + 1 + (*q).size;
+    let total = old + 1 + size(ns);
 
     if total < need {
         return Err(largest());
@@ -189,23 +172,17 @@ pub unsafe fn resize(seg: u16, need: u16) -> Result<u16, u16> {
     let left = total - need;
 
     if left > 1 {
-        let rs = s + 1 + need;
-        let r = ptr(rs);
+        let nk = kind(ns);
+        make_free(s + 1 + need, nk, left - 1);
 
-        (*r).kind = (*q).kind;
-        (*r).owner = 0;
-        (*r).size = left - 1;
-        (*r).reserved = [0; 3];
-        clear_name(r);
-
-        (*p).kind = b'M';
-        (*p).size = need;
+        set_kind(s, b'M');
+        set_size(s, need);
     } else {
-        (*p).kind = (*q).kind;
-        (*p).size = total;
+        set_kind(s, kind(ns));
+        set_size(s, total);
     }
 
-    Ok((*p).size)
+    Ok(size(s))
 }
 
 pub unsafe fn largest() -> u16 {
@@ -213,21 +190,19 @@ pub unsafe fn largest() -> u16 {
     let mut max = 0;
 
     loop {
-        let p = ptr(s);
-
-        if bad(p) {
+        if bad(s) {
             return max;
         }
 
-        if (*p).owner == 0 && (*p).size > max {
-            max = (*p).size;
+        if owner(s) == 0 && size(s) > max {
+            max = size(s);
         }
 
-        if (*p).kind == b'Z' {
+        if kind(s) == b'Z' {
             return max;
         }
 
-        s += 1 + (*p).size;
+        s += 1 + size(s);
     }
 }
 
@@ -235,20 +210,18 @@ pub unsafe fn collect() {
     let mut s = FIRST;
 
     loop {
-        let p = ptr(s);
-
-        if bad(p) {
+        if bad(s) {
             return;
         }
 
-        if (*p).owner == 0 {
+        if owner(s) == 0 {
             join(s);
         }
 
-        if (*p).kind == b'Z' {
+        if kind(s) == b'Z' {
             return;
         }
 
-        s += 1 + (*p).size;
+        s += 1 + size(s);
     }
 }

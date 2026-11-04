@@ -31,7 +31,7 @@ unsafe fn parse() -> Fs {
     let spt = u16::from_le_bytes([b.add(24).read(), b.add(25).read()]);
     let heads = u16::from_le_bytes([b.add(26).read(), b.add(27).read()]);
 
-    let root_sectors = (root_ent as u32 * 32 + bps as u32 - 1) / bps as u32;
+    let root_sectors = if bps == 0 { 0 } else { (root_ent as u32 * 32 + bps as u32 - 1) / bps as u32 };
     let root_lba = reserved as u32 + fats as u32 * spf as u32;
     let data_lba = root_lba + root_sectors;
 
@@ -49,6 +49,11 @@ pub unsafe fn init(drive: u8) -> bool {
 
     let mut fs = parse();
     fs.drive = drive;
+
+    // Not a FAT volume (e.g. zeroed BPB): do not mount, never divide by zero.
+    if fs.bps == 0 || fs.spc == 0 || fs.spt == 0 || fs.heads == 0 {
+        return false;
+    }
 
     VALID = true;
 
@@ -226,25 +231,27 @@ pub unsafe fn type_file(name: &[u8]) {
 unsafe fn match_name(entry: *const u8, name: &[u8]) -> bool {
     let mut i = 0;
 
-    while i < name.len() && i < 8 {
-        if upper(name[i]) != entry.add(i).read() {
+    while i < name.len() && name[i] != b'.' {
+        if i >= 8 || upper(name[i]) != entry.add(i).read() {
             return false;
         }
 
         i += 1;
     }
 
-    if i < name.len() && name[i] == b'.' {
-        i += 1;
+    for k in i..8 {
+        if entry.add(k).read() != b' ' {
+            return false;
+        }
+    }
 
-        for j in 0..3 {
-            if i + j >= name.len() {
-                break;
-            }
+    let ext: &[u8] = if i < name.len() { &name[i + 1..] } else { &[] };
 
-            if upper(name[i + j]) != entry.add(8 + j).read() {
-                return false;
-            }
+    for j in 0..3 {
+        let c = if j < ext.len() { upper(ext[j]) } else { b' ' };
+
+        if entry.add(8 + j).read() != c {
+            return false;
         }
     }
 
