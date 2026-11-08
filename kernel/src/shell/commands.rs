@@ -2,21 +2,26 @@
 
 use crate::bios::tty;
 use crate::mem::mcb;
+use crate::shell::env;
 
-static mut ENV: [[u8; 64]; 32] = [[0; 64]; 32];
-static mut PATH: [u8; 128] = [0; 128];
+static mut CURRENT_DRIVE: u8 = 0;
 
 pub fn run() -> ! {
     tty::print("\r\nRustDOS 0.0.1\r\n");
     tty::print("Type HELP for commands\r\n");
 
     unsafe {
-        let p = PATH.as_mut_ptr();
-        core::ptr::copy_nonoverlapping(b"C:\\".as_ptr(), p, 3);
+        env::init_path();
     }
 
     loop {
-        tty::print("\r\nC:\\>");
+        unsafe {
+            if CURRENT_DRIVE == 0 {
+                tty::print("\r\nA:\\>");
+            } else {
+                tty::print("\r\nB:\\>");
+            }
+        }
 
         let mut buf = [0u8; 127];
         let n = read_line(&mut buf);
@@ -63,6 +68,16 @@ fn exec(line: &[u8]) {
 
     let (cmd, args) = token(line);
 
+    if eq(cmd, b"A:") {
+        unsafe { CURRENT_DRIVE = 0; }
+        return;
+    }
+
+    if eq(cmd, b"B:") {
+        unsafe { CURRENT_DRIVE = 1; }
+        return;
+    }
+
     if eq(cmd, b"HELP") {
         help();
     } else if eq(cmd, b"VER") {
@@ -78,11 +93,23 @@ fn exec(line: &[u8]) {
     } else if eq(cmd, b"ECHO") {
         echo(trim(args));
     } else if eq(cmd, b"SET") {
-        set(trim(args));
+        unsafe {
+            if args.is_empty() {
+                env::print_env();
+            } else {
+                env::set_env(trim(args));
+            }
+        }
     } else if eq(cmd, b"PATH") {
-        path(trim(args));
+        unsafe {
+            if args.is_empty() {
+                env::print_path();
+            } else {
+                env::set_path(trim(args));
+            }
+        }
     } else if eq(cmd, b"RUN") {
-        crate::loader::com::test();
+        run_cmd(trim(args));
     } else {
         tty::print("Bad command or file name\r\n");
     }
@@ -99,6 +126,8 @@ fn help() {
     tty::print("  ECHO     - Display message\r\n");
     tty::print("  SET      - Display/set environment\r\n");
     tty::print("  PATH     - Display/set search path\r\n");
+    tty::print("  A:       - Switch to drive A\r\n");
+    tty::print("  B:       - Switch to drive B\r\n");
     tty::print("  RUN      - Run test program\r\n");
 }
 
@@ -135,6 +164,13 @@ fn cls() {
 
 fn dir() {
     unsafe {
+        let d = CURRENT_DRIVE;
+
+        if !crate::fs::fat::init(d) {
+            tty::print("Invalid drive\r\n");
+            return;
+        }
+
         crate::fs::fat::list_root();
     }
 }
@@ -146,7 +182,14 @@ fn r#type(name: &[u8]) {
     }
 
     unsafe {
-        crate::fs::fat::type_file(name);
+        let d = CURRENT_DRIVE;
+
+        if !crate::fs::fat::init(d) {
+            tty::print("Invalid drive\r\n");
+            return;
+        }
+
+        crate::fs::file::type_file(name);
     }
 }
 
@@ -157,207 +200,13 @@ fn echo(msg: &[u8]) {
     }
 
     let mut out = [0u8; 128];
-    let n = expand(msg, &mut out);
+    let n = unsafe { env::expand(msg, &mut out) };
 
     for i in 0..n {
         tty::putc(out[i]);
     }
 
     tty::print("\r\n");
-}
-
-fn set(args: &[u8]) {
-    if args.is_empty() {
-        tty::print("\r\nEnvironment:\r\n");
-        unsafe {
-            for i in 0..32 {
-                let e = &ENV[i];
-
-                if e[0] != 0 {
-                    for j in 0..64 {
-                        if e[j] == 0 {
-                            break;
-                        }
-
-                        tty::putc(e[j]);
-                    }
-
-                    tty::print("\r\n");
-                }
-            }
-        }
-
-        return;
-    }
-
-    let (name, val) = split_eq(args);
-
-    if name.is_empty() {
-        return;
-    }
-
-    unsafe {
-        for i in 0..32 {
-            let e = &mut ENV[i];
-
-            if env_eq(e, name) {
-                if val.is_empty() {
-                    e[0] = 0;
-                } else {
-                    env_set(e, name, val);
-                }
-
-                return;
-            }
-
-            if e[0] == 0 {
-                env_set(e, name, val);
-                return;
-            }
-        }
-    }
-}
-
-fn path(args: &[u8]) {
-    if args.is_empty() {
-        tty::print("\r\nPATH=");
-        unsafe {
-            let p = PATH.as_ptr();
-            let mut i = 0;
-
-            while i < 128 && p.add(i).read() != 0 {
-                tty::putc(p.add(i).read());
-                i += 1;
-            }
-        }
-
-        tty::print("\r\n");
-        return;
-    }
-
-    unsafe {
-        let p = PATH.as_mut_ptr();
-        let n = args.len().min(127);
-
-        core::ptr::copy_nonoverlapping(args.as_ptr(), p, n);
-        p.add(n).write(0);
-    }
-}
-
-fn expand(src: &[u8], dst: &mut [u8]) -> usize {
-    let mut i = 0;
-    let mut j = 0;
-
-    while i < src.len() && j < dst.len() {
-        if src[i] == b'%' {
-            i += 1;
-
-            if i >= src.len() {
-                break;
-            }
-
-            let start = i;
-
-            while i < src.len() && src[i] != b'%' {
-                i += 1;
-            }
-
-            if i < src.len() {
-                let name = &src[start..i];
-                let val = unsafe { env_get(name) };
-
-                for k in 0..val.len() {
-                    if j < dst.len() {
-                        dst[j] = val[k];
-                        j += 1;
-                    }
-                }
-
-                i += 1;
-            }
-        } else {
-            dst[j] = src[i];
-            i += 1;
-            j += 1;
-        }
-    }
-
-    j
-}
-
-unsafe fn env_eq(env: &[u8; 64], name: &[u8]) -> bool {
-    let mut i = 0;
-
-    while i < name.len() && i < 64 {
-        if env[i] != upper(name[i]) {
-            return false;
-        }
-
-        i += 1;
-    }
-
-    i < 64 && env[i] == b'='
-}
-
-unsafe fn env_set(env: &mut [u8; 64], name: &[u8], val: &[u8]) {
-    let mut i = 0;
-
-    for k in 0..name.len().min(31) {
-        env[i] = upper(name[k]);
-        i += 1;
-    }
-
-    env[i] = b'=';
-    i += 1;
-
-    for k in 0..val.len().min(63 - i) {
-        env[i] = val[k];
-        i += 1;
-    }
-
-    env[i] = 0;
-}
-
-unsafe fn env_get(name: &[u8]) -> &'static [u8] {
-    for i in 0..32 {
-        let e = &ENV[i];
-
-        if env_eq(e, name) {
-            let mut j = 0;
-
-            while j < 64 && e[j] != b'=' {
-                j += 1;
-            }
-
-            if j < 64 {
-                j += 1;
-
-                let mut k = j;
-
-                while k < 64 && e[k] != 0 {
-                    k += 1;
-                }
-
-                return core::slice::from_raw_parts(e.as_ptr().add(j), k - j);
-            }
-        }
-    }
-
-    &[]
-}
-
-fn split_eq(s: &[u8]) -> (&[u8], &[u8]) {
-    let mut i = 0;
-
-    while i < s.len() && s[i] != b'=' {
-        i += 1;
-    }
-
-    if i < s.len() {
-        (&s[..i], &s[i + 1..])
-    } else {
-        (s, &[])
-    }
 }
 
 fn trim(s: &[u8]) -> &[u8] {
@@ -392,20 +241,12 @@ fn eq(a: &[u8], b: &[u8]) -> bool {
     }
 
     for i in 0..a.len() {
-        if upper(a[i]) != b[i] {
+        if env::upper(a[i]) != b[i] {
             return false;
         }
     }
 
     true
-}
-
-fn upper(c: u8) -> u8 {
-    if c >= b'a' && c <= b'z' {
-        c - 32
-    } else {
-        c
-    }
 }
 
 fn print_u16(mut n: u16) {
@@ -426,5 +267,24 @@ fn print_u16(mut n: u16) {
     while i > 0 {
         i -= 1;
         tty::putc(buf[i]);
+    }
+}
+fn run_cmd(args: &[u8]) {
+    if args.is_empty() {
+        crate::loader::com::test();
+        return;
+    }
+
+    unsafe {
+        let d = CURRENT_DRIVE;
+
+        if !crate::fs::fat::init(d) {
+            tty::print("Invalid drive\r\n");
+            return;
+        }
+
+        if !crate::loader::com::run_from_disk(args) {
+            tty::print("File not found\r\n");
+        }
     }
 }

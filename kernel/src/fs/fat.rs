@@ -1,26 +1,27 @@
 use crate::bios::disk;
 use crate::bios::tty;
 
-static mut BUF1: [u8; 512] = [0; 512];
-static mut BUF2: [u8; 512] = [0; 512];
+pub static mut BUF1: [u8; 512] = [0; 512];
+pub static mut BUF2: [u8; 512] = [0; 512];
 static mut BPB: [u8; 512] = [0; 512];
+static mut DRIVE: u8 = 0;
 static mut VALID: bool = false;
 
-struct Fs {
-    drive: u8,
-    bps: u16,
-    spc: u8,
-    reserved: u16,
-    fats: u8,
-    root_ent: u16,
-    spf: u16,
-    spt: u16,
-    heads: u16,
-    root_lba: u32,
-    data_lba: u32,
+pub struct Fs {
+    pub drive: u8,
+    pub bps: u16,
+    pub spc: u8,
+    pub reserved: u16,
+    pub fats: u8,
+    pub root_ent: u16,
+    pub spf: u16,
+    pub spt: u16,
+    pub heads: u16,
+    pub root_lba: u32,
+    pub data_lba: u32,
 }
 
-unsafe fn parse() -> Fs {
+pub unsafe fn parse() -> Fs {
     let b = core::ptr::addr_of!(BPB) as *const u8;
     let bps = u16::from_le_bytes([b.add(11).read(), b.add(12).read()]);
     let spc = b.add(13).read();
@@ -31,32 +32,50 @@ unsafe fn parse() -> Fs {
     let spt = u16::from_le_bytes([b.add(24).read(), b.add(25).read()]);
     let heads = u16::from_le_bytes([b.add(26).read(), b.add(27).read()]);
 
-    let root_sectors = if bps == 0 { 0 } else { (root_ent as u32 * 32 + bps as u32 - 1) / bps as u32 };
+    let root_sectors = (root_ent as u32 * 32 + bps as u32 - 1) / bps as u32;
     let root_lba = reserved as u32 + fats as u32 * spf as u32;
     let data_lba = root_lba + root_sectors;
 
-    Fs { drive: 0, bps, spc, reserved, fats, root_ent, spf, spt, heads, root_lba, data_lba }
+    Fs {
+        drive: DRIVE,
+        bps,
+        spc,
+        reserved,
+        fats,
+        root_ent,
+        spf,
+        spt,
+        heads,
+        root_lba,
+        data_lba,
+    }
 }
 
 pub unsafe fn init(drive: u8) -> bool {
+    DRIVE = drive;
+
     let buf = core::ptr::addr_of_mut!(BUF1) as *mut u8;
 
     if !disk::read_sector(drive, 0, buf, 18, 2) {
+        VALID = false;
+        return false;
+    }
+
+    if buf.add(510).read() != 0x55 || buf.add(511).read() != 0xAA {
+        VALID = false;
+        return false;
+    }
+
+    let bps = u16::from_le_bytes([buf.add(11).read(), buf.add(12).read()]);
+
+    if bps != 512 {
+        VALID = false;
         return false;
     }
 
     core::ptr::copy_nonoverlapping(buf, core::ptr::addr_of_mut!(BPB) as *mut u8, 512);
 
-    let mut fs = parse();
-    fs.drive = drive;
-
-    // Not a FAT volume (e.g. zeroed BPB): do not mount, never divide by zero.
-    if fs.bps == 0 || fs.spc == 0 || fs.spt == 0 || fs.heads == 0 {
-        return false;
-    }
-
     VALID = true;
-
     true
 }
 
@@ -73,8 +92,8 @@ pub unsafe fn list_root() {
     let fs = parse();
     let root_sectors = (fs.root_ent as u32 * 32) / fs.bps as u32;
 
-    tty::print("\r\n Volume in drive A has no label\r\n");
-    tty::print(" Directory of A:\\\r\n\r\n");
+    tty::print("\r\n Volume in drive has no label\r\n");
+    tty::print(" Directory of root\r\n\r\n");
 
     let mut count = 0u16;
     let mut total = 0u32;
@@ -123,20 +142,14 @@ pub unsafe fn list_root() {
 }
 
 unsafe fn print_entry(e: *const u8, attr: u8, size: u32) {
-    let mut name = [b' '; 8];
-
     for i in 0..8 {
         let c = e.add(i).read();
 
-        if c == 0 {
-            break;
+        if c == 0 || c == b' ' {
+            tty::putc(b' ');
+        } else {
+            tty::putc(c);
         }
-
-        name[i] = c;
-    }
-
-    for i in 0..8 {
-        tty::putc(name[i]);
     }
 
     let ext0 = e.add(8).read();
@@ -147,7 +160,7 @@ unsafe fn print_entry(e: *const u8, attr: u8, size: u32) {
         for i in 0..3 {
             let c = e.add(8 + i).read();
 
-            if c == 0 {
+            if c == 0 || c == b' ' {
                 break;
             }
 
@@ -177,150 +190,7 @@ unsafe fn print_total(count: u16, total: u32) {
     tty::print(" bytes\r\n");
 }
 
-pub unsafe fn type_file(name: &[u8]) {
-    if !VALID {
-        tty::print("No filesystem\r\n");
-        return;
-    }
-
-    let fs = parse();
-    let root_sectors = (fs.root_ent as u32 * 32) / fs.bps as u32;
-
-    for s in 0..root_sectors {
-        let buf = core::ptr::addr_of_mut!(BUF1) as *mut u8;
-
-        if !disk::read_sector(fs.drive, fs.root_lba + s, buf, fs.spt, fs.heads) {
-            break;
-        }
-
-        for i in 0..16 {
-            let off = i * 32;
-            let name0 = buf.add(off).read();
-
-            if name0 == 0x00 {
-                tty::print("File not found\r\n");
-                return;
-            }
-
-            if name0 == 0xE5 {
-                continue;
-            }
-
-            if match_name(buf.add(off), name) {
-                let cluster = u16::from_le_bytes([
-                    buf.add(off + 26).read(),
-                                                 buf.add(off + 27).read(),
-                ]);
-
-                let size = u32::from_le_bytes([
-                    buf.add(off + 28).read(),
-                                              buf.add(off + 29).read(),
-                                              buf.add(off + 30).read(),
-                                              buf.add(off + 31).read(),
-                ]);
-
-                print_file(&fs, cluster, size);
-                return;
-            }
-        }
-    }
-
-    tty::print("File not found\r\n");
-}
-
-unsafe fn match_name(entry: *const u8, name: &[u8]) -> bool {
-    let mut i = 0;
-
-    while i < name.len() && name[i] != b'.' {
-        if i >= 8 || upper(name[i]) != entry.add(i).read() {
-            return false;
-        }
-
-        i += 1;
-    }
-
-    for k in i..8 {
-        if entry.add(k).read() != b' ' {
-            return false;
-        }
-    }
-
-    let ext: &[u8] = if i < name.len() { &name[i + 1..] } else { &[] };
-
-    for j in 0..3 {
-        let c = if j < ext.len() { upper(ext[j]) } else { b' ' };
-
-        if entry.add(8 + j).read() != c {
-            return false;
-        }
-    }
-
-    true
-}
-
-unsafe fn print_file(fs: &Fs, mut cluster: u16, size: u32) {
-    let mut left = size;
-
-    while cluster < 0x0FF8 && left > 0 {
-        let lba = fs.data_lba + (cluster as u32 - 2) * fs.spc as u32;
-
-        for s in 0..fs.spc as u32 {
-            if left == 0 {
-                break;
-            }
-
-            let buf = core::ptr::addr_of_mut!(BUF1) as *mut u8;
-
-            if !disk::read_sector(fs.drive, lba + s, buf, fs.spt, fs.heads) {
-                return;
-            }
-
-            let n = if left < fs.bps as u32 { left } else { fs.bps as u32 };
-
-            for i in 0..n as usize {
-                tty::putc(buf.add(i).read());
-            }
-
-            left -= n;
-        }
-
-        cluster = read_fat12(fs, cluster);
-    }
-}
-
-unsafe fn read_fat12(fs: &Fs, cluster: u16) -> u16 {
-    let offset = cluster as u32 + cluster as u32 / 2;
-    let sector = fs.reserved as u32 + offset / fs.bps as u32;
-    let idx = (offset % fs.bps as u32) as usize;
-
-    let buf = core::ptr::addr_of_mut!(BUF2) as *mut u8;
-
-    if !disk::read_sector(fs.drive, sector, buf, fs.spt, fs.heads) {
-        return 0x0FFF;
-    }
-
-    let lo = buf.add(idx).read() as u16;
-
-    let hi = if idx + 1 < fs.bps as usize {
-        buf.add(idx + 1).read() as u16
-    } else {
-        if !disk::read_sector(fs.drive, sector + 1, buf, fs.spt, fs.heads) {
-            return 0x0FFF;
-        }
-
-        buf.read() as u16
-    };
-
-    let val = lo | (hi << 8);
-
-    if cluster & 1 == 0 {
-        val & 0x0FFF
-    } else {
-        val >> 4
-    }
-}
-
-fn upper(c: u8) -> u8 {
+pub fn upper(c: u8) -> u8 {
     if c >= b'a' && c <= b'z' {
         c - 32
     } else {
@@ -328,7 +198,7 @@ fn upper(c: u8) -> u8 {
     }
 }
 
-fn print_u16(mut n: u16) {
+pub fn print_u16(mut n: u16) {
     if n == 0 {
         tty::putc(b'0');
         return;
@@ -349,7 +219,7 @@ fn print_u16(mut n: u16) {
     }
 }
 
-fn print_u32(mut n: u32) {
+pub fn print_u32(mut n: u32) {
     if n == 0 {
         tty::putc(b'0');
         return;

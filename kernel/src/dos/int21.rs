@@ -17,25 +17,21 @@ pub extern "C" fn int21(regs: &mut Regs) {
 }
 
 fn print_string(regs: &Regs) {
-    let addr = ((regs.ds as u32) << 4) + regs.dx as u32;
-    let mut p = addr as *const u8;
+    let seg = regs.ds;
+    let mut off = regs.dx;
 
     loop {
-        let c = unsafe { p.read_volatile() };
+        let c = unsafe { crate::arch::farmem::rd8(seg, off) };
 
         if c == b'$' {
             break;
         }
 
         crate::bios::tty::putc(c);
-        p = unsafe { p.add(1) };
+        off = off.wrapping_add(1);
     }
 }
 
 fn terminate(_regs: &Regs) {
-    crate::bios::tty::print("\r\nExit.\r\n");
-
-    loop {
-        unsafe { core::arch::asm!("hlt") }
-    }
+    crate::loader::com::terminate();
 }
