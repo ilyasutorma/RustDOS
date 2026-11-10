@@ -7,7 +7,10 @@ kernel:
 
 programs:
 	mkdir -p build
-	nasm -f bin programs/hello.asm -o build/HELLO.COM
+	for f in programs/*.asm; do \
+		n=$$(basename $$f .asm | tr a-z A-Z); \
+		nasm -f bin $$f -o build/$$n.COM || exit 1; \
+	done
 
 image: kernel programs
 	./scripts/mkimage.sh

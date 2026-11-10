@@ -15,7 +15,7 @@ pub fn upper(c: u8) -> u8 {
 
 pub unsafe fn init_path() {
     let p = PATH.as_mut_ptr();
-    core::ptr::copy_nonoverlapping(b"C:\\".as_ptr(), p, 3);
+    core::ptr::copy_nonoverlapping(b"A:\\\0".as_ptr(), p, 4);
 }
 
 pub unsafe fn print_path() {
@@ -200,4 +200,15 @@ pub fn split_eq(s: &[u8]) -> (&[u8], &[u8]) {
     } else {
         (s, &[])
     }
+}
+
+/// The PATH string (without the terminating NUL).
+pub unsafe fn path_bytes() -> &'static [u8] {
+    let mut n = 0;
+
+    while n < 128 && PATH[n] != 0 {
+        n += 1;
+    }
+
+    core::slice::from_raw_parts(PATH.as_ptr(), n)
 }

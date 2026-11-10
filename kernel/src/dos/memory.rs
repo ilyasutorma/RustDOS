@@ -1,10 +1,11 @@
 use crate::arch::regs::Regs;
 use crate::dos::errors::DosError;
+use crate::dos::process::CURRENT_PSP;
 use crate::mem::mcb;
 
 pub fn alloc(r: &mut Regs) {
     unsafe {
-        match mcb::alloc(r.bx, 1, b"PROG") {
+        match mcb::alloc(r.bx, CURRENT_PSP, b"PROG") {
             Some(seg) => {
                 r.ax = seg;
                 r.clear_carry();

@@ -20,3 +20,19 @@ pub fn read_char() -> u8 {
 pub fn getc() -> u8 {
     read_char()
 }
+
+/// True when a key is waiting in the BIOS buffer (INT 16h, AH=01h).
+pub fn key_ready() -> bool {
+    let st: u16;
+
+    unsafe {
+        core::arch::asm!(
+            "mov ah, 1",
+            "int 0x16",
+            "lahf",
+            out("ax") st,
+        );
+    }
+
+    (st & 0x4000) == 0
+}

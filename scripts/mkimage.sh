@@ -26,7 +26,12 @@ fi
 
 nasm -f bin -DKERNEL_SECTORS="$SECTORS" "$ROOT/boot/boot.asm" -o "$OUT/boot.bin"
 
-cat "$OUT/boot.bin" "$OUT/kernel.bin" > "$OUT/rustdos.img"
-truncate -s 1440K "$OUT/rustdos.img"
+# Root directory contents: every program in build/ plus test.txt.
+FILES=()
+for f in "$OUT"/*.COM; do [ -f "$f" ] && FILES+=("$f"); done
+[ -f "$ROOT/test.txt" ] && FILES+=("$ROOT/test.txt")
+
+python3 "$ROOT/scripts/mkfat.py" "$OUT/rustdos.img" "$OUT/boot.bin" "$OUT/kernel.bin" \
+    $((SECTORS + 1)) "${FILES[@]}"
 
 echo "OK: $OUT/rustdos.img (kernel: $SIZE bytes, $SECTORS sectors)"

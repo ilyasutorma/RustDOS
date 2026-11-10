@@ -225,3 +225,34 @@ pub unsafe fn collect() {
         s += 1 + size(s);
     }
 }
+
+/// Set the owner (PSP segment) of the block whose data segment is `seg`.
+pub unsafe fn set_owner_of(seg: u16, own: u16) {
+    if seg != 0 {
+        set_owner(seg - 1, own);
+    }
+}
+
+/// Release every block owned by `own` (a terminating program's PSP).
+pub unsafe fn free_owned(own: u16) {
+    let mut s = FIRST;
+
+    loop {
+        if bad(s) {
+            break;
+        }
+
+        if owner(s) == own {
+            set_owner(s, 0);
+            clear_name(s);
+        }
+
+        if kind(s) == b'Z' {
+            break;
+        }
+
+        s += 1 + size(s);
+    }
+
+    collect();
+}

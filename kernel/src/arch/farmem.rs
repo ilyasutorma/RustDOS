@@ -83,3 +83,24 @@ pub unsafe fn copy_to(seg: u16, off: u16, src: *const u8, count: u16) {
         i += 1;
     }
 }
+
+/// Copy `count` bytes from `seg:off` into kernel memory (DS:dst).
+pub unsafe fn copy_from(seg: u16, off: u16, dst: *mut u8, count: u16) {
+    let mut i: u16 = 0;
+
+    while i < count {
+        dst.add(i as usize).write(rd8(seg, off.wrapping_add(i)));
+        i += 1;
+    }
+}
+
+/// Current data segment (the kernel segment). Rust pointers are offsets in it.
+pub fn ds_seg() -> u16 {
+    let v: u16;
+
+    unsafe {
+        asm!("mov {0:x}, ds", out(reg) v, options(nomem, nostack, preserves_flags));
+    }
+
+    v
+}

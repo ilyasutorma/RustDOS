@@ -10,6 +10,7 @@ mod loader;
 mod mem;
 mod panic;
 mod shell;
+mod util;
 
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
@@ -20,7 +21,8 @@ pub extern "C" fn kernel_main() -> ! {
         bios::tty::print("[ivt ok]\r\n");
         mem::mcb::init(0x3000, 0x9000);
         bios::tty::print("[mcb ok]\r\n");
-        let fat = fs::fat::init(0x00);
+        dos::files::init();
+        let fat = fs::vol::init(0x00);
         bios::tty::print(if fat { "[fat ok]\r\n" } else { "[fat FAIL]\r\n" });
     }
 

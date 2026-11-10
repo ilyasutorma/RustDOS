@@ -65,7 +65,7 @@ core::arch::global_asm!(
     "    sti",
     "    mov ss, cs:[saved_ss]",
     "    mov sp, cs:[saved_sp]",
-    "    iret",
+    "    .byte 0xCA, 0x02, 0x00", // retf 2: pop IP, CS and drop the saved flags (keeps CF)
 
     ".global int20_start",
     "int20_start:",
@@ -109,7 +109,29 @@ core::arch::global_asm!(
     "    mov sp, cs:[saved_sp]",
     "    iret",
 
+    // Return to a parent program after its child terminated (see dos/process.rs).
+    ".global resume_start",
+    "resume_start:",
+    "    cli",
+    "    mov ss, cs:[RESUME]",
+    "    mov sp, cs:[RESUME+2]",
+    "    mov bx, cs:[RESUME+6]",
+    "    mov cx, cs:[RESUME+8]",
+    "    mov dx, cs:[RESUME+10]",
+    "    mov si, cs:[RESUME+12]",
+    "    mov di, cs:[RESUME+14]",
+    "    mov bp, cs:[RESUME+16]",
+    "    mov es, cs:[RESUME+20]",
+    "    mov ax, cs:[RESUME+18]",
+    "    mov ds, ax",
+    "    mov ax, cs:[RESUME+4]",
+    "    clc",
+    "    sti",
+    "    .byte 0xCA, 0x02, 0x00",
+
     ".section .data.tramp, \"aw\"",
+    ".global saved_ss",
+    ".global saved_sp",
     "kern_seg: .word 0x1000",
     "kern_sp: .word 0xEFF0",
     "saved_ss: .word 0",
